@@ -1,0 +1,68 @@
+To compile, load, and unload the vmemraid module:
+- Open Terminal.
+- $ cd vmemraid
+- $ make
+- If the compile is successful, you will have a file
+named vmemraid.ko. This is the compiled kernel
+module.
+- $ sudo insmod vmemraid.ko
+- This command load the module into the kernel.
+- $ sudo lsmod
+- This command lists all currently loaded modules.
+- Your should see a listing for vmemraid.
+- $ sudo rmmod vmemraid
+- This command unloads the module.
+To partition and format a block device:
+Once your module works to the point that it successfully
+registers a block device with the system, you will see a file
+called /dev/vmemraid. This is the device file that represents
+your “disk”.
+To create a file system on your “disk”, you must first use the
+fdisk utility to partition the disk:
+-
+-
+-
+-
+-
+-
+$ sudo fdisk /dev/vmemraid
+Type n, and press enter (new partition).
+Type p, and press enter (primary partition).
+Type 1, and press enter (partition 1).
+Press enter for all following prompts to select defaults.
+When you come back to the fdisk prompt, type p to display
+the partition table.
+- If you see a single Linux partition, you have correctly
+partitioned your write.
+- Type w, and press enter (write partition table and exit).
+After you partition your disk, you will see an additional device
+file has been created: /dev/vmemraid1
+This new file represents the partition that you have created on
+the disk. You can now create a file system on your new
+partition:
+- $ sudo mkfs.ext3 /dev/vmemraid1
+- This will create a Linux ext3 file system on your
+partition.
+After you have created the file system, you must “mount” it to
+make use of it:
+- $ mkdir /home/vadmin/vmemraid_mnt (this creates an empty
+directory to serve as a “mount point”, only necessary the
+first time).
+- sudo mount /dev/vmemraid1 /home/vadmin/vmemraid_mnt
+You should now have your “disk” mounted at /home/vadmin/
+vmemraid_mnt.
+You may verify that the disk is mounted by typing:
+!
+$ df
+KEEP IN MIND THAT UNLESS YOUR DRIVER IS 100% WORKING, YOU WILL
+BE UNLIKELY TO COMPLETE ALL OF THESE STEPS.
+To drop/add memdisks using the supplied RAID Utility:
+- First, load the vmemraid module as instructed above.
+- $ cd ~/vmemraid
+- $ sudo ./raidutil/raidutil /dev/vmemraid list
+- This will list the currently attached memdisks.
+- $ sudo ./raidutil/raidutil /dev/vmemraid drop n
+- This will drop the disk at location n.
+- $ sudo ./raidutil/raidutil /dev/vmemraid new n
+- This will create a new disk at location n.
+
