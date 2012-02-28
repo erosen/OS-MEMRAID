@@ -31,10 +31,11 @@ struct vmemraid_dev {
 	struct disk_array *disk_array;
 	short users;
 	spinlock_t lock;
+	u8 *data;
 
 	struct request_queue *queue;
 	struct gendisk *gd;
-};
+} Device;
 
 /* Functions to create the disk array and read and write from the memdisks */
 struct disk_array *create_disk_array(unsigned num_disks, unsigned disk_size_sectors);

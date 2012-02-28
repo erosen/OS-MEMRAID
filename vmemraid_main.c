@@ -2,6 +2,7 @@
 /* vmemraid_main.c */
 /* by William A. Katsak <wkatsak@cs.rutgers.edu> */
 /* for CS 416, Fall 2011, Rutgers University */
+/* Completed by Elie Rosen */
 
 /* This sets up some functions for printing output, and tagging the output */
 /* with the name of the module */
@@ -10,14 +11,16 @@
 /* and other pr_ functions. */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <linux/kernel.h>
-#include <linux/init.h>
+#include <linux/kernel.h>	/* printk() */
+#include <linux/init.h> 
 #include <linux/module.h>
-#include <linux/fs.h>
+#include <linux/moduleparam.h>
+#include <linux/fs.h>		/* everything... */
 #include <linux/blkdev.h>
 #include <linux/spinlock.h>
-#include <linux/errno.h>
+#include <linux/errno.h>	/* error codes */
 #include <linux/hdreg.h>
+#include <linux/vmalloc.h>
 #include "vmemraid.h"
 
 /* Constants to define the number of disks in the array */
@@ -26,7 +29,7 @@
 /* reference them via these constants. */
 /* Default is 5 disks, each of size 8192 sectors x 4 KB/sector = 32 MB */
 #define NUM_DISKS 5
-#define DISK_SIZE_SECTORS 8192
+#define NUM_SECTORS 8192
 
 /* Pointer for device struct. You should populate this in init */
 struct vmemraid_dev *dev;
@@ -88,7 +91,7 @@ static struct block_device_operations vmemraid_ops = {
 	.release		= vmemraid_release,
 	.getgeo			= vmemraid_getgeo,
 	/* do not tamper with or attempt to replace this entry for ioctl */
-	.ioctl		= vmemraid_ioctl
+	.ioctl			= vmemraid_ioctl
 };
 
 /* Init function */
@@ -97,6 +100,47 @@ static struct block_device_operations vmemraid_ops = {
 /* NOTE: This is where you should allocate the disk array */
 static int __init vmemraid_init(void)
 {
+	/* Set up empty device */
+	Device.size = NUM_SECTORS * BLOCK_SIZE;
+	spin_lock_init(&Device.lock);
+	Device.data = vmalloc(Device.size);
+	if (Device.data == NULL)
+		return -ENOMEM; 
+	
+	/* Get a request queue */
+	Device.queue = blk_init_queue(vmemraid_request, &Device.lock);
+	if (Device.queue == NULL)
+		goto out;
+	blk_queue_logical_block_size(Device.queue, NUM_SECTORS);
+	
+	/* Get registered. */
+	Device.major = register_blkdev(Device.major, "vmemraid");
+	if (Device.major <= 0) {
+		printk(KERN_WARNING "vmemraid: unable to get major number\n");
+		goto out;
+	}
+	
+	/* And the gendisk structure. */
+	Device.gd = alloc_disk(VMEMRAID_NUM_MINORS);
+	if (!Device.gd)
+		goto out_unregister;
+		
+	Device.gd->major = Device.major;
+	Device.gd->first_minor = 0;
+	Device.gd->fops = &vmemraid_ops;
+	Device.gd->private_data = &Device;
+	strcpy(Device.gd->disk_name, "vmemraid0");
+	set_capacity(Device.gd, NUM_SECTORS);
+	Device.gd->queue = Device.queue;
+	add_disk(Device.gd);
+
+	return 0;
+
+out_unregister:
+	unregister_blkdev(Device.major, "vmemraid");
+out:
+	vfree(Device.data);
+	return -ENOMEM;
 	return 0;
 }
 
@@ -106,7 +150,11 @@ static int __init vmemraid_init(void)
 /* the system. */
 static void __exit vmemraid_exit(void)
 {
-
+	del_gendisk(Device.gd);
+	put_disk(Device.gd);
+	unregister_blkdev(Device.major, "vmemraid");
+	blk_cleanup_queue(Device.queue);
+	vfree(Device.data);
 }
 
 /* Tell the module system where the init and exit points are. */
