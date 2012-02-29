@@ -34,11 +34,42 @@
 /* Pointer for device struct. You should populate this in init */
 struct vmemraid_dev *dev;
 
+
+static void vmemraid_transfer(struct vmemraid_dev *dev, sector_t sector,
+                unsigned long nsect, char *buffer, int write) {
+        unsigned long offset = sector * KERNEL_SECTOR_SIZE;
+        unsigned long nbytes = nsect * KERNEL_SECTOR_SIZE;
+ 
+        if ((offset + nbytes) > dev->size) {
+                printk (KERN_NOTICE "vmemraid: Beyond-end write (%ld %ld)\n", offset, nbytes);
+                return;
+        }
+        if (write)
+                memcpy(dev->data + offset, buffer, nbytes);
+        else
+                memcpy(buffer, dev->data + offset, nbytes);
+}
+ 
 /* Request function. This is registered with the block API and gets */
 /* called whenever someone wants data from your device */
 static void vmemraid_request(struct request_queue *q)
 {
-
+	struct request *req;
+ 
+        req = blk_fetch_request(q);
+        while (req != NULL) {
+                if (req == NULL || (req->cmd_type != REQ_TYPE_FS)) {
+                        printk (KERN_NOTICE "Skip non-CMD request\n");
+                        __blk_end_request_all(req, -EIO);
+                        continue;
+                }
+                vmemraid_transfer(dev, blk_rq_pos(req), blk_rq_cur_sectors(req),
+                                req->buffer, rq_data_dir(req));
+                if ( ! __blk_end_request_cur(req, 0) ) {
+                        req = blk_fetch_request(q);
+                }
+        }
+ 
 }
 
 /* Open function. Gets called when the device file is opened */
@@ -100,15 +131,17 @@ static struct block_device_operations vmemraid_ops = {
 /* NOTE: This is where you should allocate the disk array */
 static int __init vmemraid_init(void)
 {
+	//dev = vmalloc(sizeof(struct vmemraid_dev));	
+	
 	/* Set up empty device */
 	dev->size = NUM_SECTORS * BLOCK_SIZE;
-	spin_lock_init(&dev->lock);
+	spin_lock_init(&(dev->lock));
 	dev->data = vmalloc(dev->size);
 	if (dev->data == NULL)
 		return -ENOMEM; 
 	
 	/* Get a request queue */
-	dev->queue = blk_init_queue(vmemraid_request, &dev->lock);
+	dev->queue = blk_init_queue(vmemraid_request, &(dev->lock));
 	if (dev->queue == NULL)
 		goto out;
 	blk_queue_logical_block_size(dev->queue, NUM_SECTORS);
@@ -128,7 +161,7 @@ static int __init vmemraid_init(void)
 	dev->gd->major = dev->major;
 	dev->gd->first_minor = 0;
 	dev->gd->fops = &vmemraid_ops;
-	dev->gd->private_data = &dev;
+	dev->gd->private_data = dev;
 	strcpy(dev->gd->disk_name, "vmemraid0");
 	set_capacity(dev->gd, NUM_SECTORS);
 	dev->gd->queue = dev->queue;
@@ -139,6 +172,7 @@ static int __init vmemraid_init(void)
 out_unregister:
 	unregister_blkdev(dev->major, "vmemraid");
 out:
+	//vfree(dev);
 	vfree(dev->data);
 	return -ENOMEM;
 	return 0;
