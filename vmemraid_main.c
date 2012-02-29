@@ -101,45 +101,45 @@ static struct block_device_operations vmemraid_ops = {
 static int __init vmemraid_init(void)
 {
 	/* Set up empty device */
-	Device.size = NUM_SECTORS * BLOCK_SIZE;
-	spin_lock_init(&Device.lock);
-	Device.data = vmalloc(Device.size);
-	if (Device.data == NULL)
+	dev->size = NUM_SECTORS * BLOCK_SIZE;
+	spin_lock_init(&dev->lock);
+	dev->data = vmalloc(dev->size);
+	if (dev->data == NULL)
 		return -ENOMEM; 
 	
 	/* Get a request queue */
-	Device.queue = blk_init_queue(vmemraid_request, &Device.lock);
-	if (Device.queue == NULL)
+	dev->queue = blk_init_queue(vmemraid_request, &dev->lock);
+	if (dev->queue == NULL)
 		goto out;
-	blk_queue_logical_block_size(Device.queue, NUM_SECTORS);
+	blk_queue_logical_block_size(dev->queue, NUM_SECTORS);
 	
 	/* Get registered. */
-	Device.major = register_blkdev(Device.major, "vmemraid");
-	if (Device.major <= 0) {
+	dev->major = register_blkdev(dev->major, "vmemraid");
+	if (dev->major <= 0) {
 		printk(KERN_WARNING "vmemraid: unable to get major number\n");
 		goto out;
 	}
 	
 	/* And the gendisk structure. */
-	Device.gd = alloc_disk(VMEMRAID_NUM_MINORS);
-	if (!Device.gd)
+	dev->gd = alloc_disk(VMEMRAID_NUM_MINORS);
+	if (!dev->gd)
 		goto out_unregister;
 		
-	Device.gd->major = Device.major;
-	Device.gd->first_minor = 0;
-	Device.gd->fops = &vmemraid_ops;
-	Device.gd->private_data = &Device;
-	strcpy(Device.gd->disk_name, "vmemraid0");
-	set_capacity(Device.gd, NUM_SECTORS);
-	Device.gd->queue = Device.queue;
-	add_disk(Device.gd);
+	dev->gd->major = dev->major;
+	dev->gd->first_minor = 0;
+	dev->gd->fops = &vmemraid_ops;
+	dev->gd->private_data = &dev;
+	strcpy(dev->gd->disk_name, "vmemraid0");
+	set_capacity(dev->gd, NUM_SECTORS);
+	dev->gd->queue = dev->queue;
+	add_disk(dev->gd);
 
 	return 0;
 
 out_unregister:
-	unregister_blkdev(Device.major, "vmemraid");
+	unregister_blkdev(dev->major, "vmemraid");
 out:
-	vfree(Device.data);
+	vfree(dev->data);
 	return -ENOMEM;
 	return 0;
 }
@@ -150,11 +150,11 @@ out:
 /* the system. */
 static void __exit vmemraid_exit(void)
 {
-	del_gendisk(Device.gd);
-	put_disk(Device.gd);
-	unregister_blkdev(Device.major, "vmemraid");
-	blk_cleanup_queue(Device.queue);
-	vfree(Device.data);
+	del_gendisk(dev->gd);
+	put_disk(dev->gd);
+	unregister_blkdev(dev->major, "vmemraid");
+	blk_cleanup_queue(dev->queue);
+	vfree(dev->data);
 }
 
 /* Tell the module system where the init and exit points are. */
