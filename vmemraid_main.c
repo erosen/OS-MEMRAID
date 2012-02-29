@@ -23,64 +23,37 @@
 #include <linux/vmalloc.h>
 #include "vmemraid.h"
 
-/* Constants to define the number of disks in the array */
-/* and the size in HARDWARE sectors of each disk */
-/* You should set these values once, right here, and always */
-/* reference them via these constants. */
-/* Default is 5 disks, each of size 8192 sectors x 4 KB/sector = 32 MB */
-#define NUM_DISKS 5
-#define NUM_SECTORS 8192
-
 /* Pointer for device struct. You should populate this in init */
 struct vmemraid_dev *dev;
-
-
-static void vmemraid_transfer(struct vmemraid_dev *dev, sector_t sector,
-                unsigned long nsect, char *buffer, int write) {
-        unsigned long offset = sector * KERNEL_SECTOR_SIZE;
-        unsigned long nbytes = nsect * KERNEL_SECTOR_SIZE;
- 
-        if ((offset + nbytes) > dev->size) {
-                printk (KERN_NOTICE "vmemraid: Beyond-end write (%ld %ld)\n", offset, nbytes);
-                return;
-        }
-        if (write)
-                memcpy(dev->data + offset, buffer, nbytes);
-        else
-                memcpy(buffer, dev->data + offset, nbytes);
-}
  
 /* Request function. This is registered with the block API and gets */
 /* called whenever someone wants data from your device */
 static void vmemraid_request(struct request_queue *q)
 {
-	struct request *req;
- 
-        req = blk_fetch_request(q);
-        while (req != NULL) {
-                if (req == NULL || (req->cmd_type != REQ_TYPE_FS)) {
-                        printk (KERN_NOTICE "Skip non-CMD request\n");
-                        __blk_end_request_all(req, -EIO);
-                        continue;
-                }
-                vmemraid_transfer(dev, blk_rq_pos(req), blk_rq_cur_sectors(req),
-                                req->buffer, rq_data_dir(req));
-                if ( ! __blk_end_request_cur(req, 0) ) {
-                        req = blk_fetch_request(q);
-                }
-        }
- 
+
 }
 
 /* Open function. Gets called when the device file is opened */
 static int vmemraid_open(struct block_device *block_device, fmode_t mode)
 {
+	pr_info("open");
+	spin_lock(&dev->lock);
+	if (!dev->users)
+		check_disk_change(block_device->bd_inode->i_bdev);
+	dev->users++;
+	spin_unlock(&dev->lock);
+	pr_info("open finish");
 	return 0;
 }
 
 /* Release function. Gets called when the device file is closed */
 static int vmemraid_release(struct gendisk *gd, fmode_t mode)
-{
+{	
+	pr_info("release");
+	spin_lock(&dev->lock);
+	dev->users--;
+	spin_unlock(&dev->lock);
+	pr_info("release finish");
 	return 0;
 }
 
@@ -105,6 +78,8 @@ int vmemraid_getgeo(struct block_device *block_device, struct hd_geometry *geo)
 /* NOTE: This will be called with dev->lock HELD */
 void vmemraid_callback_drop_disk(int disk_num)
 {
+	/* the disk is droped */
+	dev->available[disk_num] = 0;
 
 }
 /* This gets called when a dropped disk is replaced with a new one */
@@ -131,51 +106,58 @@ static struct block_device_operations vmemraid_ops = {
 /* NOTE: This is where you should allocate the disk array */
 static int __init vmemraid_init(void)
 {
-	//dev = vmalloc(sizeof(struct vmemraid_dev));	
+	int i;
+	// Allocate space for device model
+	dev = kmalloc(sizeof(struct vmemraid_dev), GFP_KERNEL);
+	if (!dev)
+		pr_err("vmemraid: Unable to allocate space for device structure");
+
+	/* Create all the memory disks */
+	dev->disk_array = create_disk_array(NUM_DISKS, DISK_SIZE_SECTORS * KERNEL_SECTOR_SIZE);	
 	
-	/* Set up empty device */
-	dev->size = NUM_SECTORS * BLOCK_SIZE;
-	spin_lock_init(&(dev->lock));
-	dev->data = vmalloc(dev->size);
-	if (dev->data == NULL)
-		return -ENOMEM; 
+	/* register the device to /dev */
+	dev->major = register_blkdev(0, "vmemraid");
+	if (dev->major <= 0)
+		pr_err("vmemraid: Unable to register device with kernel");
 	
-	/* Get a request queue */
-	dev->queue = blk_init_queue(vmemraid_request, &(dev->lock));
-	if (dev->queue == NULL)
-		goto out;
-	blk_queue_logical_block_size(dev->queue, NUM_SECTORS);
+	/* mark all the disks as available */
 	
-	/* Get registered. */
-	dev->major = register_blkdev(dev->major, "vmemraid");
-	if (dev->major <= 0) {
-		printk(KERN_WARNING "vmemraid: unable to get major number\n");
-		goto out;
+	for (i = 0; i < NUM_DISKS; i++) {
+		dev->available[i] = 1;
 	}
 	
-	/* And the gendisk structure. */
+	/* Set total size capacity*/
+	dev->size = DISK_SIZE_SECTORS * KERNEL_SECTOR_SIZE * (NUM_DISKS-1);
+	
+	/* initialize spin lock */
+	spin_lock_init(&(dev->lock));
+	
+	/* create queue for requests */
+	dev->queue = blk_init_queue(vmemraid_request, &(dev->lock));
+	if (!dev->queue)
+		pr_err("vmemraid: Unable to initialize request queue");
+	blk_queue_logical_block_size(dev->queue, KERNEL_SECTOR_SIZE);
+	
+	/* Create the gendisk */
 	dev->gd = alloc_disk(VMEMRAID_NUM_MINORS);
 	if (!dev->gd)
-		goto out_unregister;
-		
+		pr_err("vmemraid: Unable to allocate gendisk");
+	
+	/* set all the gendisk info */
+	pr_info("make gd");
 	dev->gd->major = dev->major;
 	dev->gd->first_minor = 0;
 	dev->gd->fops = &vmemraid_ops;
-	dev->gd->private_data = dev;
-	strcpy(dev->gd->disk_name, "vmemraid0");
-	set_capacity(dev->gd, NUM_SECTORS);
 	dev->gd->queue = dev->queue;
+	dev->gd->private_data = dev; 
+	strcpy(dev->gd->disk_name, "vmemraid");
+	set_capacity(dev->gd, dev->size/KERNEL_SECTOR_SIZE);
+	
+	pr_info("add gd");
 	add_disk(dev->gd);
-
+	
 	return 0;
 
-out_unregister:
-	unregister_blkdev(dev->major, "vmemraid");
-out:
-	//vfree(dev);
-	vfree(dev->data);
-	return -ENOMEM;
-	return 0;
 }
 
 /* Exit function */
@@ -184,11 +166,16 @@ out:
 /* the system. */
 static void __exit vmemraid_exit(void)
 {
+	/* Remove the gendisk being used */
 	del_gendisk(dev->gd);
-	put_disk(dev->gd);
+	/* remove all traces of the disk array */
+	destroy_disk_array(dev->disk_array);
+	/* Unregister the device */
 	unregister_blkdev(dev->major, "vmemraid");
+	/* clean up the queue */
 	blk_cleanup_queue(dev->queue);
-	vfree(dev->data);
+	/* free used memory */
+	kfree(dev);
 }
 
 /* Tell the module system where the init and exit points are. */

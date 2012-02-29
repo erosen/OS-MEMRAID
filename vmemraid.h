@@ -3,6 +3,14 @@
 /* by William A. Katsak <wkatsak@cs.rutgers.edu> */
 /* for CS 416, Fall 2011, Rutgers University */
 
+/* Constants to define the number of disks in the array */
+/* and the size in HARDWARE sectors of each disk */
+/* You should set these values once, right here, and always */
+/* reference them via these constants. */
+/* Default is 5 disks, each of size 8192 sectors x 4 KB/sector = 32 MB */
+#define NUM_DISKS 5
+#define DISK_SIZE_SECTORS 8192
+
 /* None of these parameters should be changed */
 
 /* Your device should pretend to have 512 byte sectors, but of course */
@@ -31,10 +39,11 @@ struct vmemraid_dev {
 	struct disk_array *disk_array;
 	short users;
 	spinlock_t lock;
-	u8 *data;
 
 	struct request_queue *queue;
 	struct gendisk *gd;
+
+	short available[NUM_DISKS];
 };
 
 /* Functions to create the disk array and read and write from the memdisks */
