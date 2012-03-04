@@ -30,13 +30,13 @@ struct vmemraid_dev *dev;
 /* called whenever someone wants data from your device */
 static void vmemraid_request(struct request_queue *q)
 {
-
+	
 }
 
 /* Open function. Gets called when the device file is opened */
 static int vmemraid_open(struct block_device *block_device, fmode_t mode)
 {
-	pr_info("open");
+	pr_info("open start");
 	spin_lock(&dev->lock);
 	if (!dev->users)
 		check_disk_change(block_device->bd_inode->i_bdev);
@@ -49,7 +49,7 @@ static int vmemraid_open(struct block_device *block_device, fmode_t mode)
 /* Release function. Gets called when the device file is closed */
 static int vmemraid_release(struct gendisk *gd, fmode_t mode)
 {	
-	pr_info("release");
+	pr_info("release start");
 	spin_lock(&dev->lock);
 	dev->users--;
 	spin_unlock(&dev->lock);
@@ -78,7 +78,8 @@ int vmemraid_getgeo(struct block_device *block_device, struct hd_geometry *geo)
 /* NOTE: This will be called with dev->lock HELD */
 void vmemraid_callback_drop_disk(int disk_num)
 {
-	/* the disk is droped */
+	/* set the availabilty of a droped disk to 0 */
+	pr_info("vmemraid: disk %d was dropped", disk_num);
 	dev->available[disk_num] = 0;
 
 }
@@ -86,7 +87,7 @@ void vmemraid_callback_drop_disk(int disk_num)
 /* NOTE: This will be called with dev->lock HELD */
 void vmemraid_callback_new_disk(int disk_num)
 {
-
+	pr_info("vmemraid: disk %d was added", disk_num);
 }
 
 /* This structure must be passed the the block driver API when the */
@@ -107,7 +108,8 @@ static struct block_device_operations vmemraid_ops = {
 static int __init vmemraid_init(void)
 {
 	int i;
-	// Allocate space for device model
+	
+	/* Allocate space for the device */
 	dev = kmalloc(sizeof(struct vmemraid_dev), GFP_KERNEL);
 	if (!dev)
 		pr_err("vmemraid: Unable to allocate space for device structure");
@@ -121,7 +123,6 @@ static int __init vmemraid_init(void)
 		pr_err("vmemraid: Unable to register device with kernel");
 	
 	/* mark all the disks as available */
-	
 	for (i = 0; i < NUM_DISKS; i++) {
 		dev->available[i] = 1;
 	}
