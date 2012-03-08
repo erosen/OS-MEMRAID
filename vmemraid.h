@@ -43,7 +43,6 @@ struct vmemraid_dev {
 	struct request_queue *queue;
 	struct gendisk *gd;
 
-	short available[NUM_DISKS];
 };
 
 /* Functions to create the disk array and read and write from the memdisks */
@@ -61,4 +60,3 @@ int vmemraid_ioctl(struct block_device *block_device, fmode_t mode,
 /* Callbacks that get called when a disk is dropped or added */
 void vmemraid_callback_drop_disk(int disk_num);
 void vmemraid_callback_new_disk(int disk_num);
-
