@@ -29,9 +29,12 @@ struct vmemraid_dev *dev;
 /* Raid 4 read function also will send to parity function if data DNE*/
 int do_raid4_read(unsigned disk_num, unsigned disk_stripe, char *buffer)
 {
+	
 	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
+	pr_info("in raid read\n");
 	
 	if(memdisk) {
+		pr_info("in raid read memdisk\n");
 		memdisk_read_sector(memdisk, buffer, disk_stripe);
 		return 1;
 	}
@@ -43,9 +46,11 @@ int do_raid4_read(unsigned disk_num, unsigned disk_stripe, char *buffer)
 /* Raid 4 write function also will send to parity function after every write*/
 int do_raid4_write(unsigned disk_num, unsigned disk_stripe, char *buffer)
 {
-	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
 	
+	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
+	pr_info("in raid write\n");
 	if(memdisk) {
+		pr_info("in raid memdisk\n");
 		memdisk_write_sector(memdisk, buffer, disk_stripe);
 		return 1;
 	}
@@ -68,20 +73,24 @@ static void vmemraid_transfer(struct vmemraid_dev *dev, unsigned long sector, un
 		
 		hw_sector = current_sector / 8;
 		hw_offset = (current_sector % 8) * KERNEL_SECTOR_SIZE;
+		pr_info("sector is %d, offset is %d\n", hw_sector, hw_offset);
 	
 		disk_num = hw_sector % NUM_DISKS;
 		disk_stripe = hw_sector / NUM_DISKS;
-		buffer_addr = buffer * (i * KERNEL_SECTOR_SIZE);
+		buffer_addr = buffer + (i * KERNEL_SECTOR_SIZE);
 		
+		pr_info("disk_num is %d, disk_stripe is %d\n", disk_num, disk_stripe);
 		pr_info("%s", buffer_addr);
 		if (write) {
+			pr_info("in write\n");
 			do_raid4_read(disk_num, disk_stripe, tmp_block);
-			memcpy(&tmp_block + hw_offset, &buffer_addr, KERNEL_SECTOR_SIZE);
+			memcpy(&tmp_block + hw_offset, buffer_addr, KERNEL_SECTOR_SIZE);
 			do_raid4_write(disk_num, disk_stripe, tmp_block);
 		}
 		else {
+			pr_info("in read\n");
 			do_raid4_read(disk_num, disk_stripe, tmp_block);
-			memcpy(&tmp_block + hw_offset, buffer_addr, KERNEL_SECTOR_SIZE);
+			memcpy(buffer_addr, &tmp_block + hw_offset, KERNEL_SECTOR_SIZE);
 		}
 	}
 }					
@@ -116,13 +125,13 @@ static void vmemraid_request(struct request_queue *q)
 /* Open function. Gets called when the device file is opened */
 static int vmemraid_open(struct block_device *block_device, fmode_t mode)
 {
-	pr_info("open start");
+	/*pr_info("open start");
 	spin_lock(&dev->lock);
 	if (!dev->users)
 		check_disk_change(block_device->bd_inode->i_bdev);
 	dev->users++;
 	spin_unlock(&dev->lock);
-	pr_info("open finish");
+	pr_info("open finish"); */
 	return 0;
 }
 
