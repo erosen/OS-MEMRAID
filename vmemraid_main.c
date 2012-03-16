@@ -14,28 +14,28 @@
 #include <linux/kernel.h>	/* printk() */
 #include <linux/init.h> 
 #include <linux/module.h>
-#include <linux/moduleparam.h>
 #include <linux/fs.h>		/* everything... */
 #include <linux/blkdev.h>
 #include <linux/spinlock.h>
 #include <linux/errno.h>	/* error codes */
 #include <linux/hdreg.h>
 #include <linux/slab.h>
+#include <linux/types.h>
+#include <linux/genhd.h>
+#include <linux/vmalloc.h>
 #include "vmemraid.h"
 
 /* Pointer for device struct. You should populate this in init */
 struct vmemraid_dev *dev;
 
 /* Raid 4 read function also will send to parity function if data DNE*/
-int do_raid4_read(unsigned disk_num, unsigned disk_stripe, char *buffer)
+int do_raid4_read(unsigned disk_num, unsigned disk_row, char *buffer)
 {
 	
 	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
-	pr_info("in raid read\n");
 	
 	if(memdisk) {
-		pr_info("in raid read memdisk\n");
-		memdisk_read_sector(memdisk, buffer, disk_stripe);
+		memdisk_read_sector(memdisk, buffer, disk_row);
 		return 1;
 	}
 	else {
@@ -44,14 +44,13 @@ int do_raid4_read(unsigned disk_num, unsigned disk_stripe, char *buffer)
 }
 
 /* Raid 4 write function also will send to parity function after every write*/
-int do_raid4_write(unsigned disk_num, unsigned disk_stripe, char *buffer)
+int do_raid4_write(unsigned disk_num, unsigned disk_row, char *buffer)
 {
 	
 	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
-	pr_info("in raid write\n");
+
 	if(memdisk) {
-		pr_info("in raid memdisk\n");
-		memdisk_write_sector(memdisk, buffer, disk_stripe);
+		memdisk_write_sector(memdisk, buffer, disk_row);
 		return 1;
 	}
 	else {
@@ -63,10 +62,10 @@ static void vmemraid_transfer(struct vmemraid_dev *dev, unsigned long sector, un
 {
 
 	int i, hw_sector,hw_offset;
-	static char tmp_block[4096];
+	static char block_buffer[4096]; /* Holds the 4k block till its ready to be written over */
 	unsigned long current_sector;
-	unsigned disk_num, disk_stripe;
-	char *buffer_addr;
+	unsigned disk_num, disk_row;
+	char *buffer_addr; 
 	
 	for (i = 0; i < num_sectors; i++) {
 		current_sector = sector * i;
@@ -75,22 +74,21 @@ static void vmemraid_transfer(struct vmemraid_dev *dev, unsigned long sector, un
 		hw_offset = (current_sector % 8) * KERNEL_SECTOR_SIZE;
 		pr_info("sector is %d, offset is %d\n", hw_sector, hw_offset);
 	
-		disk_num = hw_sector % NUM_DISKS;
-		disk_stripe = hw_sector / NUM_DISKS;
+		disk_num = hw_sector % (NUM_DISKS-1);
+		disk_row = hw_sector / (NUM_DISKS-1);
 		buffer_addr = buffer + (i * KERNEL_SECTOR_SIZE);
 		
-		pr_info("disk_num is %d, disk_stripe is %d\n", disk_num, disk_stripe);
-		pr_info("%s", buffer_addr);
+		pr_info("disk_num is %d, disk_row is %d\n", disk_num, disk_row);
+		
+		do_raid4_read(disk_num, disk_row, block_buffer); 
 		if (write) {
 			pr_info("in write\n");
-			do_raid4_read(disk_num, disk_stripe, tmp_block);
-			memcpy(&tmp_block + hw_offset, buffer_addr, KERNEL_SECTOR_SIZE);
-			do_raid4_write(disk_num, disk_stripe, tmp_block);
+			memcpy(&block_buffer + hw_offset, buffer_addr, KERNEL_SECTOR_SIZE);
+			do_raid4_write(disk_num, disk_row, block_buffer); 
 		}
 		else {
 			pr_info("in read\n");
-			do_raid4_read(disk_num, disk_stripe, tmp_block);
-			memcpy(buffer_addr, &tmp_block + hw_offset, KERNEL_SECTOR_SIZE);
+			memcpy(buffer_addr, &block_buffer + hw_offset, KERNEL_SECTOR_SIZE);
 		}
 	}
 }					
@@ -115,8 +113,9 @@ static void vmemraid_request(struct request_queue *q)
 		
 		vmemraid_transfer(dev, blk_rq_pos(req), blk_rq_cur_sectors(req), req->buffer, rq_data_dir(req));
 		
-		if(!__blk_end_request_cur(req, 0))
+		if(!__blk_end_request_cur(req, 0)) {
 			req = blk_fetch_request(q);
+		}
 			
 	}
 	
@@ -125,24 +124,24 @@ static void vmemraid_request(struct request_queue *q)
 /* Open function. Gets called when the device file is opened */
 static int vmemraid_open(struct block_device *block_device, fmode_t mode)
 {
-	/*pr_info("open start");
+	pr_info("open start");
 	spin_lock(&dev->lock);
 	if (!dev->users)
 		check_disk_change(block_device->bd_inode->i_bdev);
 	dev->users++;
 	spin_unlock(&dev->lock);
-	pr_info("open finish"); */
+	pr_info("open finish"); 
 	return 0;
 }
 
 /* Release function. Gets called when the device file is closed */
 static int vmemraid_release(struct gendisk *gd, fmode_t mode)
 {	
-	/*pr_info("release start");
+	pr_info("release start");
 	spin_lock(&dev->lock);
 	dev->users--;
 	spin_unlock(&dev->lock);
-	pr_info("release finish"); */
+	pr_info("release finish");
 	return 0;
 }
 
@@ -196,31 +195,38 @@ static struct block_device_operations vmemraid_ops = {
 /* NOTE: This is where you should allocate the disk array */
 static int __init vmemraid_init(void)
 {	
-	/* Allocate space for the device */
+	int major = register_blkdev(0, "vmemraid");
+
+	if (major <= 0) {
+		pr_warn("Unable to get major number. Driver will not function.\n");
+		return -EBUSY;
+	}
+	
 	dev = kmalloc(sizeof(struct vmemraid_dev), GFP_KERNEL);
-	
+
 	memset(dev, 0, sizeof(struct vmemraid_dev));
-	
-	dev->major = 0;
-	dev->size = DISK_SIZE_SECTORS * VMEMRAID_HW_SECTOR_SIZE * NUM_DISKS;
+	dev->major = major;
+	dev->size = DISK_SIZE_SECTORS * VMEMRAID_HW_SECTOR_SIZE*(NUM_DISKS-1); 
+
 	dev->disk_array = create_disk_array(NUM_DISKS, DISK_SIZE_SECTORS);
 
-	if (!dev->disk_array) {
-		pr_warn("Could no tallocate mem for disks");
-		return -ENOMEM;
+	if(!dev->disk_array) {
+		pr_warn("Could not allocate memory for disks. Driver will not function.\n");
 	}
-
+	
 	spin_lock_init(&dev->lock);
 	dev->queue = blk_init_queue(vmemraid_request, &dev->lock);
 
-	if (!dev-> queue)
+	if(!dev->queue)	{
 		goto out_cleanup;
+	}
 
 	blk_queue_logical_block_size(dev->queue, KERNEL_SECTOR_SIZE);
 	dev->queue->queuedata = dev;
+
 	dev->gd = alloc_disk(VMEMRAID_NUM_MINORS);
 
-	if (!dev->gd) {
+	if(!dev->gd) {
 		pr_warn("alloc_disk failure. Driver will not function.\n");
 		goto out_cleanup;
 	}
@@ -232,25 +238,21 @@ static int __init vmemraid_init(void)
 	dev->gd->private_data = dev;
 
 	snprintf(dev->gd->disk_name, 32, "vmemraid");
-	
-	/* in 512 byte sectors */
-	set_capacity(dev->gd, DISK_SIZE_SECTORS * (VMEMRAID_HW_SECTOR_SIZE / KERNEL_SECTOR_SIZE) * NUM_DISKS);
+
+	set_capacity(dev->gd, (dev->size/KERNEL_SECTOR_SIZE));
 
 	add_disk(dev->gd);
 
 	pr_info("Loaded driver...");
+	
+	return 0;
 
-	return 0;
-	
 out_cleanup:
-	if (dev->disk_array) 
+	if(dev->disk_array)
 		destroy_disk_array(dev->disk_array);
-	
 	unregister_blkdev(dev->major, "vmemraid");
-	
+
 	return -ENOMEM;
-	
-	return 0;
 }
 
 /* Exit function */
