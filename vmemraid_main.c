@@ -173,24 +173,6 @@ static int vmemraid_release(struct gendisk *gd, fmode_t mode)
 	return 0;
 }
 
-/*void calc_block_parity(void *result, void *block1, void *block2)
-{
-	unsigned *uresult = result;
-	unsigned *ublock1 = block1;
-	unsigned *ublock2 = block2;
-
-	int num_ops = VMEMRAID_H*_SECTOR_SIZE/ sizeof(unsigned);
-	int i;
-	
-	for (i = 0; i < num_ops; i++)
-	{
-		*uresult = *ublock1 ^ *ublock2;
-		uresult++;
-		ublock1++;
-		ublock2++;
-	}	 
-}*/
-
 /* getgeo function. Provides device "geometry". This should be */
 /* the old cylinders:heads:sectors type geometry. As long as you */
 /* populate dev->size with the total usable *****bytes***** of your disk */
