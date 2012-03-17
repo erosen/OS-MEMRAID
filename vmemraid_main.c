@@ -33,6 +33,7 @@ int do_raid4_read(unsigned disk_num, unsigned disk_row, char *buffer)
 	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
 	
 	if(memdisk) {
+		/* this operation is quick because the data already exists */
 		memdisk_read_sector(memdisk, buffer, disk_row);
 		return 1;
 	}
@@ -46,30 +47,44 @@ int do_raid4_write(unsigned disk_num, unsigned disk_row, char *buffer)
 	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
 
 	if(memdisk) {
+	/* if the disk is alive write the new data, then rebuild parity onto the last disk */
 		memdisk_write_sector(memdisk, buffer, disk_row);
-		build_parity_last(*buffer, disk_row); /* rebuild parity and place it in last disk */
+		build_parity(buffer, NUM_DISKS, disk_row); /* Create parity data */
+		
+		if(dev->disk_array->disks[NUM_DISKS]) /* Check that last disk exists */
+			memdisk_write_sector(dev->disk_array->disks[NUM_DISKS], buffer_block, disk_row);
+		else
+			pr_info("Error more than two disks missing!");
+		
 		return 1;
 	}
 	else {	
-		pr_info("Since the disk is does not exist we throw out the data");
+	/* if the disk you want is gone, recreate parity on the last disk anyways */
+		build_parity(buffer, NUM_DISKS, disk_row); /* Create parity data */
+		
+		if(dev->disk_array->disks[NUM_DISKS]) /* Check that last disk exists */
+			memdisk_write_sector(dev->disk_array->disks[NUM_DISKS], buffer_block, disk_row);
+		else
+			pr_info("Error more than two disks missing!");
+		
 		return 0;
 	}
 }
 /* this function xor's all of the disks and stores in on the last disk */
-static void build_parity_last(char *buffer, unsigned disk_row)
+static void build_parity(char *buffer, unsigned disk_num, unsigned disk_row)
 {
 	int i,j;
 	static char buffer_block[VMEMRAID_HW_SECTOR_SIZE];
 	
-	for(i = 0; i < (NUM_DISKS-1); i++) {
-		memdisk_read_sector(dev->disk_array->disks[i], buffer_block, disk_row);
+	for(i = 0; i < NUM_DISKS; i++) {
+		if(!disk_num) {
+			memdisk_read_sector(dev->disk_array->disks[i], buffer_block, disk_row);
 		
-		for(j = 0; j < VMEMRAID_HW_SECTOR_SIZE; j++) {
-			buffer_block[j] ^= buffer[j];
+			for(j = 0; j < VMEMRAID_HW_SECTOR_SIZE; j++) {
+				buffer[j] ^= buffer_block[j];
+			}
 		}
 	}
-	
-	memdisk_write_sector(dev->disk_array->disks[NUM_DISKS], buffer_block, disk_row);
 }
 
 static void vmemraid_transfer(struct vmemraid_dev *dev, unsigned long sector, 
