@@ -55,6 +55,8 @@ int do_raid4_read(unsigned disk_num, unsigned disk_row, char *buffer)
 		return 1;
 	}
 	else {	
+		/* rebuild the data we want from parity */
+		build_parity(buffer, disk_num, disk_row);
 		return 0;
 	}
 }
@@ -92,7 +94,7 @@ static void vmemraid_transfer(struct vmemraid_dev *dev, unsigned long sector,
 			      unsigned long num_sectors, char *buffer, int write)
 {
 	int i, hw_sector,hw_offset;
-	static char block_buffer[4096]; /* Holds the 4k block till its ready to be written over */
+	static char block_buffer[VMEMRAID_HW_SECTOR_SIZE]; /* Holds the 4k block till its ready to be written over */
 	unsigned long current_sector;
 	unsigned disk_num, disk_row;
 	char *buffer_addr;
