@@ -24,20 +24,11 @@
 #include <linux/vmalloc.h>
 #include <linux/genhd.h>
 
-/* Constants to define the number of disks in the array */
-/* and the size in HARDWARE sectors of each disk */
-/* You should set these values once, right here, and always */
-/* reference them via these constants. */
-/* Default is 5 disks, each of size 8192 sectors x 4 KB/sector = 32 MB */
-#define NUM_DISKS 5
-#define DISK_SIZE_SECTORS 8192
-
 /* Pointer for device struct. You should populate this in init */
 struct vmemraid_dev *dev;
 static int major_num = 0;
 
-//read and write need to use parity
-int do_raid0_read(unsigned disk_num, unsigned disk_row, char *buffer)
+int do_raid4_read(unsigned disk_num, unsigned disk_row, char *buffer)
 {
 	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
 	
@@ -50,17 +41,35 @@ int do_raid0_read(unsigned disk_num, unsigned disk_row, char *buffer)
 	}
 }
 
-int do_raid0_write(unsigned disk_num, unsigned disk_row, char *buffer)
+int do_raid4_write(unsigned disk_num, unsigned disk_row, char *buffer)
 {
 	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
 
 	if(memdisk) {
 		memdisk_write_sector(memdisk, buffer, disk_row);
+		build_parity_last(*buffer, disk_row); /* rebuild parity and place it in last disk */
 		return 1;
 	}
 	else {	
+		pr_info("Since the disk is does not exist we throw out the data");
 		return 0;
 	}
+}
+/* this function xor's all of the disks and stores in on the last disk */
+static void build_parity_last(char *buffer, unsigned disk_row)
+{
+	int i,j;
+	static char buffer_block[VMEMRAID_HW_SECTOR_SIZE];
+	
+	for(i = 0; i < (NUM_DISKS-1); i++) {
+		memdisk_read_sector(dev->disk_array->disks[i], buffer_block, disk_row);
+		
+		for(j = 0; j < VMEMRAID_HW_SECTOR_SIZE; j++) {
+			buffer_block[j] ^= buffer[j];
+		}
+	}
+	
+	memdisk_write_sector(dev->disk_array->disks[NUM_DISKS], buffer_block, disk_row);
 }
 
 static void vmemraid_transfer(struct vmemraid_dev *dev, unsigned long sector, 
@@ -84,10 +93,10 @@ static void vmemraid_transfer(struct vmemraid_dev *dev, unsigned long sector,
 		buffer_addr = buffer + (i * KERNEL_SECTOR_SIZE);
 		pr_info("disk_num is %d, disk_row is %d\n", disk_num, disk_row);
 
-		do_raid0_read(disk_num, disk_row, block_buffer);
+		do_raid4_read(disk_num, disk_row, block_buffer);
 		if(write) {
 			memcpy(block_buffer + hw_offset, buffer_addr, KERNEL_SECTOR_SIZE);
-			do_raid0_write(disk_num, disk_row, block_buffer);
+			do_raid4_write(disk_num, disk_row, block_buffer);
 		}
 		else {
 			memcpy(buffer_addr, block_buffer + hw_offset, KERNEL_SECTOR_SIZE);
@@ -225,7 +234,7 @@ static int __init vmemraid_init(void)
 	dev->major = major;
 	dev->size = DISK_SIZE_SECTORS * VMEMRAID_HW_SECTOR_SIZE*(NUM_DISKS-1); //need NUM_DISKS-1
 
-	dev->disk_array = create_disk_array((NUM_DISKS-1), DISK_SIZE_SECTORS);
+	dev->disk_array = create_disk_array(NUM_DISKS, DISK_SIZE_SECTORS);
 
 	if(!dev->disk_array)
 		pr_warn("Could not allocate memory for disks. Driver will not function.\n");
