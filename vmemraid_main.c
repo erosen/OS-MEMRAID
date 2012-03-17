@@ -28,7 +28,7 @@
 struct vmemraid_dev *dev;
 static int major_num = 0;
 
-/* this function xor's all of the disks and stores in on the last disk */
+
 void build_parity(char *buffer, unsigned disk_num, unsigned disk_row)
 {
 	int i,j;
@@ -39,9 +39,10 @@ void build_parity(char *buffer, unsigned disk_num, unsigned disk_row)
 			memdisk_read_sector(dev->disk_array->disks[i], buffer_block, disk_row);
 		
 			for(j = 0; j < VMEMRAID_HW_SECTOR_SIZE; j++) {
-				buffer[j] ^= buffer_block[j];
+				buffer[j] = buffer[j] ^ buffer_block[j];
 			}
 		}
+	
 	}
 }
 
@@ -51,11 +52,13 @@ int do_raid4_read(unsigned disk_num, unsigned disk_row, char *buffer)
 	
 	if(memdisk) {
 		/* this operation is quick because the data already exists */
+		pr_info("everythings looking good, reading data that exists\n");
 		memdisk_read_sector(memdisk, buffer, disk_row);
 		return 1;
 	}
 	else {	
 		/* rebuild the data we want from parity */
+		pr_info("oh no, it appears disk_num %d is missing so the data has to be rebuilt, no worries\n", disk_num);
 		build_parity(buffer, disk_num, disk_row);
 		return 0;
 	}
@@ -63,26 +66,37 @@ int do_raid4_read(unsigned disk_num, unsigned disk_row, char *buffer)
 
 int do_raid4_write(unsigned disk_num, unsigned disk_row, char *buffer)
 {
+	int i;
 	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
 
 	if(memdisk) {
-	/* if the disk is alive write the new data, then rebuild parity onto the last disk */
+		/* if the disk is alive write the new data, then rebuild parity onto the last disk */
+		pr_info("disk %d is alive and kicking", disk_num);
 		memdisk_write_sector(memdisk, buffer, disk_row);
-		build_parity(buffer, NUM_DISKS-1, disk_row); /* Create parity data */
 		
-		if(dev->disk_array->disks[NUM_DISKS-1]) /* Check that last disk exists */
-			memdisk_write_sector(dev->disk_array->disks[NUM_DISKS], buffer, disk_row);
-		
+		if(dev->disk_array->disks[NUM_DISKS-1]) { /* Check that last disk exists */
+			/* set data in the buffer to 0 because data is already stored in the correct location */
+			for(i = 0; i < VMEMRAID_HW_SECTOR_SIZE; i++) 
+				buffer[i] = 0;
+			
+			build_parity(buffer, NUM_DISKS-1, disk_row); /* Create parity for the last disk */
+			memdisk_write_sector(dev->disk_array->disks[NUM_DISKS-1], buffer, disk_row);
+		}
+		else
+			pr_warn("parity disk is missing, guess the data can't be stored now");
+			
 		return 1;
 	}
 	else {	
-	/* if the disk you want is gone, recreate parity on the last disk anyways */
-		build_parity(buffer, NUM_DISKS, disk_row); /* Create parity data */
+		/* if the disk you want is gone, recreate parity on the last disk anyways but don't write*/
+		pr_info("disk %d doesn't exist but the data can still be saved through magic", disk_num);
 		
-		if(dev->disk_array->disks[NUM_DISKS-1]) /* Check that last disk exists */
-			memdisk_write_sector(dev->disk_array->disks[NUM_DISKS], buffer, disk_row);
+		if(dev->disk_array->disks[NUM_DISKS-1]) {/* Check that last disk exists */
+			build_parity(buffer, NUM_DISKS-1, disk_row); /* Create parity data */
+			memdisk_write_sector(dev->disk_array->disks[NUM_DISKS-1], buffer, disk_row);
+		}
 		else
-			pr_info("Error more than two disks missing!");
+			pr_info("Error more than two disks missing all hope is lost!");
 		
 		return 0;
 	}
@@ -97,7 +111,7 @@ static void vmemraid_transfer(struct vmemraid_dev *dev, unsigned long sector,
 	unsigned disk_num, disk_row;
 	char *buffer_addr;
 	
-	for( i=0; i < num_sectors; i++)
+	for(i = 0; i < num_sectors; i++)
 	{
 		current_sector = sector + i;
 		hw_sector = current_sector / 8;
@@ -201,18 +215,20 @@ void vmemraid_callback_drop_disk(int disk_num)
 void vmemraid_callback_new_disk(int disk_num)
 {	
 	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
-	static char buffer_block[VMEMRAID_HW_SECTOR_SIZE];
-	int disk_row;
+	static char buffer[VMEMRAID_HW_SECTOR_SIZE];
+	int disk_row, num_rows;
+	
+	num_rows = memdisk_num_sectors(memdisk);
 	
 	pr_warn("attempting to add disk %d", disk_num);
-	pr_info("time to rebuild all the data from parity ughh.....");
+	pr_info("time to rebuild all the data from parity ughh...");
 	
-	for(disk_row = 0; disk_row <= KERNEL_SECTOR_SIZE; disk_row++) {
-		build_parity(buffer_block, disk_num, disk_row);
-		memdisk_write_sector(memdisk, buffer_block, disk_row);
+	for(disk_row = 0; disk_row < num_rows; disk_row++) {
+		build_parity(buffer, disk_num, disk_row);
+		memdisk_write_sector(memdisk, buffer, disk_row);
 	}
 	
-	pr_warn("disk %d was added successfully", disk_num);
+	pr_info("disk %d was added successfully", disk_num);
 	
 	
 }
@@ -242,12 +258,9 @@ static int __init vmemraid_init(void)
 	}
 	
 	dev = kmalloc(sizeof(struct vmemraid_dev), GFP_KERNEL);
-
-
 	memset(dev, 0, sizeof(struct vmemraid_dev));
 	dev->major = major;
-	dev->size = DISK_SIZE_SECTORS * VMEMRAID_HW_SECTOR_SIZE*(NUM_DISKS-1); //need NUM_DISKS-1
-
+	dev->size = DISK_SIZE_SECTORS * VMEMRAID_HW_SECTOR_SIZE*(NUM_DISKS-1); 
 	dev->disk_array = create_disk_array(NUM_DISKS, DISK_SIZE_SECTORS);
 
 	if(!dev->disk_array)
@@ -259,7 +272,6 @@ static int __init vmemraid_init(void)
 	if(!dev->queue)
 		goto out_cleanup;
 	
-
 	blk_queue_logical_block_size(dev->queue, KERNEL_SECTOR_SIZE);
 	dev->queue->queuedata = dev;
 
@@ -282,7 +294,7 @@ static int __init vmemraid_init(void)
 
 	add_disk(dev->gd);
 
-	pr_info("Loaded driver...");
+	pr_info("Disk added successfully!");
 	
 	return 0;
 
@@ -301,7 +313,6 @@ out_cleanup:
 /* the system. */
 static void __exit vmemraid_exit(void)
 {
-
 	if(dev->gd) {
 		del_gendisk(dev->gd);
 		put_disk(dev->gd);
