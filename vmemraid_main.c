@@ -48,6 +48,7 @@ void build_parity(char *buffer, unsigned disk_num, unsigned disk_row)
 
 int do_raid4_read(unsigned disk_num, unsigned disk_row, char *buffer)
 {
+	int i;
 	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
 	
 	if(memdisk) {
@@ -329,6 +330,8 @@ static void __exit vmemraid_exit(void)
 		destroy_disk_array(dev->disk_array);
 		
 	unregister_blkdev(major_num, "vmemraid");
+	
+	kfree(dev);
 }
 
 /* Tell the module system where the init and exit points are. */
