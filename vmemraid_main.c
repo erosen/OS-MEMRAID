@@ -2,7 +2,6 @@
 /* vmemraid_main.c */
 /* by William A. Katsak <wkatsak@cs.rutgers.edu> */
 /* for CS 416, Fall 2011, Rutgers University */
-/* Completed by Elie Rosen */
 
 /* This sets up some functions for printing output, and tagging the output */
 /* with the name of the module */
@@ -11,116 +10,118 @@
 /* and other pr_ functions. */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <linux/kernel.h>	/* printk() */
-#include <linux/init.h> 
+#include <linux/kernel.h>
+#include <linux/init.h>
 #include <linux/module.h>
-#include <linux/fs.h>		/* everything... */
+#include <linux/fs.h>
 #include <linux/blkdev.h>
 #include <linux/spinlock.h>
-#include <linux/errno.h>	/* error codes */
+#include <linux/errno.h>
 #include <linux/hdreg.h>
+#include "vmemraid.h"
 #include <linux/slab.h>
 #include <linux/types.h>
-#include <linux/genhd.h>
 #include <linux/vmalloc.h>
-#include "vmemraid.h"
+#include <linux/genhd.h>
+
+/* Constants to define the number of disks in the array */
+/* and the size in HARDWARE sectors of each disk */
+/* You should set these values once, right here, and always */
+/* reference them via these constants. */
+/* Default is 5 disks, each of size 8192 sectors x 4 KB/sector = 32 MB */
+#define NUM_DISKS 5
+#define DISK_SIZE_SECTORS 8192
 
 /* Pointer for device struct. You should populate this in init */
 struct vmemraid_dev *dev;
+static int major_num = 0;
 
-/* Raid 4 read function also will send to parity function if data DNE*/
-int do_raid4_read(unsigned disk_num, unsigned disk_row, char *buffer)
+//read and write need to use parity
+int do_raid0_read(unsigned disk_num, unsigned disk_row, char *buffer)
 {
-	
 	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
 	
 	if(memdisk) {
 		memdisk_read_sector(memdisk, buffer, disk_row);
 		return 1;
 	}
-	else {
+	else {	
 		return 0;
 	}
 }
 
-/* Raid 4 write function also will send to parity function after every write*/
-int do_raid4_write(unsigned disk_num, unsigned disk_row, char *buffer)
+int do_raid0_write(unsigned disk_num, unsigned disk_row, char *buffer)
 {
-	
 	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
 
 	if(memdisk) {
 		memdisk_write_sector(memdisk, buffer, disk_row);
 		return 1;
 	}
-	else {
+	else {	
 		return 0;
 	}
 }
-				
-static void vmemraid_transfer(struct vmemraid_dev *dev, unsigned long sector, unsigned long num_sectors, char *buffer, int write)
-{
 
+static void vmemraid_transfer(struct vmemraid_dev *dev, unsigned long sector, 
+			      unsigned long num_sectors, char *buffer, int write)
+{
 	int i, hw_sector,hw_offset;
 	static char block_buffer[4096]; /* Holds the 4k block till its ready to be written over */
 	unsigned long current_sector;
 	unsigned disk_num, disk_row;
-	char *buffer_addr; 
+	char *buffer_addr;
 	
-	for (i = 0; i < num_sectors; i++) {
-		current_sector = sector * i;
-		
+	for( i=0; i < num_sectors; i++)
+	{
+		current_sector = sector + i;
 		hw_sector = current_sector / 8;
-		hw_offset = (current_sector % 8) * KERNEL_SECTOR_SIZE;
+		hw_offset = (current_sector % 8)* KERNEL_SECTOR_SIZE;
 		pr_info("sector is %d, offset is %d\n", hw_sector, hw_offset);
-	
+
 		disk_num = hw_sector % (NUM_DISKS-1);
-		disk_row = hw_sector / (NUM_DISKS-1);
+		disk_row = hw_sector / (NUM_DISKS-1); 
 		buffer_addr = buffer + (i * KERNEL_SECTOR_SIZE);
-		
 		pr_info("disk_num is %d, disk_row is %d\n", disk_num, disk_row);
-		
-		do_raid4_read(disk_num, disk_row, block_buffer); 
-		if (write) {
-			pr_info("in write\n");
-			memcpy(&block_buffer + hw_offset, buffer_addr, KERNEL_SECTOR_SIZE);
-			do_raid4_write(disk_num, disk_row, block_buffer); 
+
+		do_raid0_read(disk_num, disk_row, block_buffer);
+		if(write) {
+			memcpy(block_buffer + hw_offset, buffer_addr, KERNEL_SECTOR_SIZE);
+			do_raid0_write(disk_num, disk_row, block_buffer);
 		}
 		else {
-			pr_info("in read\n");
-			memcpy(buffer_addr, &block_buffer + hw_offset, KERNEL_SECTOR_SIZE);
+			memcpy(buffer_addr, block_buffer + hw_offset, KERNEL_SECTOR_SIZE);
 		}
 	}
-}					
+}
+
 /* Request function. This is registered with the block API and gets */
 /* called whenever someone wants data from your device */
 static void vmemraid_request(struct request_queue *q)
 {
 	struct request *req;
-	
-	pr_info("Starting a request\n");
-	
+	pr_info("Starting request\n");
 	req = blk_fetch_request(q);
+
+	while (req != NULL) {
+		pr_info("handling reques\n");		
 	
-	while(req != NULL) {
-		pr_info("Handle a request\n");
-		
-		if (req->cmd_type != REQ_TYPE_FS) {
-			pr_info("Skipping a non file system request/n");
+		if(req->cmd_type != REQ_TYPE_FS) {
+			pr_info("Skip non-cmd request.\n");
 			__blk_end_request_all(req, -EIO);
 			continue;
 		}
-		
-		vmemraid_transfer(dev, blk_rq_pos(req), blk_rq_cur_sectors(req), req->buffer, rq_data_dir(req));
-		
-		if(!__blk_end_request_cur(req, 0)) {
+
+		vmemraid_transfer(dev, blk_rq_pos(req), blk_rq_cur_sectors(req),req->buffer, rq_data_dir(req));
+
+		if(!__blk_end_request_cur(req,0)) {
 			req = blk_fetch_request(q);
 		}
-			
+
+		pr_info("End request\n");
 	}
-	
-	pr_info("End request\n");
 }
+
 /* Open function. Gets called when the device file is opened */
 static int vmemraid_open(struct block_device *block_device, fmode_t mode)
 {
@@ -136,7 +137,7 @@ static int vmemraid_open(struct block_device *block_device, fmode_t mode)
 
 /* Release function. Gets called when the device file is closed */
 static int vmemraid_release(struct gendisk *gd, fmode_t mode)
-{	
+{
 	pr_info("release start");
 	spin_lock(&dev->lock);
 	dev->users--;
@@ -144,6 +145,24 @@ static int vmemraid_release(struct gendisk *gd, fmode_t mode)
 	pr_info("release finish");
 	return 0;
 }
+
+/*void calc_block_parity(void *result, void *block1, void *block2)
+{
+	unsigned *uresult = result;
+	unsigned *ublock1 = block1;
+	unsigned *ublock2 = block2;
+
+	int num_ops = VMEMRAID_H*_SECTOR_SIZE/ sizeof(unsigned);
+	int i;
+	
+	for (i = 0; i < num_ops; i++)
+	{
+		*uresult = *ublock1 ^ *ublock2;
+		uresult++;
+		ublock1++;
+		ublock2++;
+	}	 
+}*/
 
 /* getgeo function. Provides device "geometry". This should be */
 /* the old cylinders:heads:sectors type geometry. As long as you */
@@ -165,11 +184,8 @@ int vmemraid_getgeo(struct block_device *block_device, struct hd_geometry *geo)
 /* This gets called when a disk is dropped from the array */
 /* NOTE: This will be called with dev->lock HELD */
 void vmemraid_callback_drop_disk(int disk_num)
-{
-	/* set the availabilty of a droped disk to 0 */
+{ 
 	pr_warn("vmemraid: disk %d was dropped", disk_num);
-	
-
 }
 /* This gets called when a dropped disk is replaced with a new one */
 /* NOTE: This will be called with dev->lock HELD */
@@ -186,7 +202,7 @@ static struct block_device_operations vmemraid_ops = {
 	.release		= vmemraid_release,
 	.getgeo			= vmemraid_getgeo,
 	/* do not tamper with or attempt to replace this entry for ioctl */
-	.ioctl			= vmemraid_ioctl
+	.ioctl		= vmemraid_ioctl
 };
 
 /* Init function */
@@ -194,32 +210,32 @@ static struct block_device_operations vmemraid_ops = {
 /* driver that is registered with the system */
 /* NOTE: This is where you should allocate the disk array */
 static int __init vmemraid_init(void)
-{	
+{
 	int major = register_blkdev(0, "vmemraid");
 
-	if (major <= 0) {
+	if (major <= 0)	{
 		pr_warn("Unable to get major number. Driver will not function.\n");
 		return -EBUSY;
 	}
 	
 	dev = kmalloc(sizeof(struct vmemraid_dev), GFP_KERNEL);
 
+
 	memset(dev, 0, sizeof(struct vmemraid_dev));
 	dev->major = major;
-	dev->size = DISK_SIZE_SECTORS * VMEMRAID_HW_SECTOR_SIZE*(NUM_DISKS-1); 
+	dev->size = DISK_SIZE_SECTORS * VMEMRAID_HW_SECTOR_SIZE*(NUM_DISKS-1); //need NUM_DISKS-1
 
-	dev->disk_array = create_disk_array(NUM_DISKS, DISK_SIZE_SECTORS);
+	dev->disk_array = create_disk_array((NUM_DISKS-1), DISK_SIZE_SECTORS);
 
-	if(!dev->disk_array) {
+	if(!dev->disk_array)
 		pr_warn("Could not allocate memory for disks. Driver will not function.\n");
-	}
-	
+		
 	spin_lock_init(&dev->lock);
 	dev->queue = blk_init_queue(vmemraid_request, &dev->lock);
 
-	if(!dev->queue)	{
+	if(!dev->queue)
 		goto out_cleanup;
-	}
+	
 
 	blk_queue_logical_block_size(dev->queue, KERNEL_SECTOR_SIZE);
 	dev->queue->queuedata = dev;
@@ -250,6 +266,7 @@ static int __init vmemraid_init(void)
 out_cleanup:
 	if(dev->disk_array)
 		destroy_disk_array(dev->disk_array);
+		
 	unregister_blkdev(dev->major, "vmemraid");
 
 	return -ENOMEM;
@@ -261,16 +278,19 @@ out_cleanup:
 /* the system. */
 static void __exit vmemraid_exit(void)
 {
-	/* Remove the gendisk being used */
-	del_gendisk(dev->gd);
-	/* remove all traces of the disk array */
-	destroy_disk_array(dev->disk_array);
-	/* Unregister the device */
-	unregister_blkdev(dev->major, "vmemraid");
-	/* clean up the queue */
-	blk_cleanup_queue(dev->queue);
-	/* free used memory */
-	kfree(dev);
+
+	if(dev->gd) {
+		del_gendisk(dev->gd);
+		put_disk(dev->gd);
+	}
+	
+	if(dev->queue)
+		blk_cleanup_queue(dev->queue);
+
+	if(dev->disk_array)
+		destroy_disk_array(dev->disk_array);
+		
+	unregister_blkdev(major_num, "vmemraid");
 }
 
 /* Tell the module system where the init and exit points are. */
@@ -280,4 +300,3 @@ module_exit(vmemraid_exit);
 /* Declare the license for the module to be GPL. This can be important in some */
 /* cases, as certain kernel functions are only exported to GPL modules. */
 MODULE_LICENSE("GPL");
-

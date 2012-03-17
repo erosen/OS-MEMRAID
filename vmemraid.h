@@ -42,7 +42,6 @@ struct vmemraid_dev {
 
 	struct request_queue *queue;
 	struct gendisk *gd;
-
 };
 
 /* Functions to create the disk array and read and write from the memdisks */
