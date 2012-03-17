@@ -111,6 +111,8 @@ static void vmemraid_transfer(struct vmemraid_dev *dev, unsigned long sector,
 		buffer_addr = buffer + (i * KERNEL_SECTOR_SIZE);
 		pr_info("disk_num is %d, disk_row is %d\n", disk_num, disk_row);
 
+
+
 		do_raid4_read(disk_num, disk_row, block_buffer);
 		if(write) {
 			memcpy(block_buffer + hw_offset, buffer_addr, KERNEL_SECTOR_SIZE);
@@ -131,7 +133,7 @@ static void vmemraid_request(struct request_queue *q)
 	req = blk_fetch_request(q);
 
 	while (req != NULL) {
-		pr_info("handling reques\n");		
+		pr_info("handling request\n");		
 	
 		if(req->cmd_type != REQ_TYPE_FS) {
 			pr_info("Skip non-cmd request.\n");
@@ -194,13 +196,27 @@ int vmemraid_getgeo(struct block_device *block_device, struct hd_geometry *geo)
 /* NOTE: This will be called with dev->lock HELD */
 void vmemraid_callback_drop_disk(int disk_num)
 { 
-	pr_warn("vmemraid: disk %d was dropped", disk_num);
+	pr_warn("disk %d was dropped", disk_num);
 }
 /* This gets called when a dropped disk is replaced with a new one */
 /* NOTE: This will be called with dev->lock HELD */
 void vmemraid_callback_new_disk(int disk_num)
-{
-	pr_warn("vmemraid: disk %d was added", disk_num);
+{	
+	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
+	static char buffer_block[VMEMRAID_HW_SECTOR_SIZE];
+	int disk_row;
+	
+	pr_warn("attempting to add disk %d", disk_num);
+	pr_info("time to rebuild all the data from parity ughh.....");
+	
+	for(disk_row = 0; disk_row <= KERNEL_SECTOR_SIZE; disk_row++) {
+		build_parity(buffer_block, disk_num, disk_row);
+		memdisk_write_sector(memdisk, buffer_block, disk_row);
+	}
+	
+	pr_warn("disk %d was added successfully", disk_num);
+	
+	
 }
 
 /* This structure must be passed the the block driver API when the */
