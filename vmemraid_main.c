@@ -28,6 +28,23 @@
 struct vmemraid_dev *dev;
 static int major_num = 0;
 
+/* this function xor's all of the disks and stores in on the last disk */
+void build_parity(char *buffer, unsigned disk_num, unsigned disk_row)
+{
+	int i,j;
+	static char buffer_block[VMEMRAID_HW_SECTOR_SIZE];
+	
+	for(i = 0; i < NUM_DISKS; i++) {
+		if(!disk_num) {
+			memdisk_read_sector(dev->disk_array->disks[i], buffer_block, disk_row);
+		
+			for(j = 0; j < VMEMRAID_HW_SECTOR_SIZE; j++) {
+				buffer[j] ^= buffer_block[j];
+			}
+		}
+	}
+}
+
 int do_raid4_read(unsigned disk_num, unsigned disk_row, char *buffer)
 {
 	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
@@ -52,7 +69,7 @@ int do_raid4_write(unsigned disk_num, unsigned disk_row, char *buffer)
 		build_parity(buffer, NUM_DISKS, disk_row); /* Create parity data */
 		
 		if(dev->disk_array->disks[NUM_DISKS]) /* Check that last disk exists */
-			memdisk_write_sector(dev->disk_array->disks[NUM_DISKS], buffer_block, disk_row);
+			memdisk_write_sector(dev->disk_array->disks[NUM_DISKS], buffer, disk_row);
 		else
 			pr_info("Error more than two disks missing!");
 		
@@ -63,27 +80,11 @@ int do_raid4_write(unsigned disk_num, unsigned disk_row, char *buffer)
 		build_parity(buffer, NUM_DISKS, disk_row); /* Create parity data */
 		
 		if(dev->disk_array->disks[NUM_DISKS]) /* Check that last disk exists */
-			memdisk_write_sector(dev->disk_array->disks[NUM_DISKS], buffer_block, disk_row);
+			memdisk_write_sector(dev->disk_array->disks[NUM_DISKS], buffer, disk_row);
 		else
 			pr_info("Error more than two disks missing!");
 		
 		return 0;
-	}
-}
-/* this function xor's all of the disks and stores in on the last disk */
-static void build_parity(char *buffer, unsigned disk_num, unsigned disk_row)
-{
-	int i,j;
-	static char buffer_block[VMEMRAID_HW_SECTOR_SIZE];
-	
-	for(i = 0; i < NUM_DISKS; i++) {
-		if(!disk_num) {
-			memdisk_read_sector(dev->disk_array->disks[i], buffer_block, disk_row);
-		
-			for(j = 0; j < VMEMRAID_HW_SECTOR_SIZE; j++) {
-				buffer[j] ^= buffer_block[j];
-			}
-		}
 	}
 }
 
