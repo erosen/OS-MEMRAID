@@ -1,68 +1,66 @@
-To compile, load, and unload the vmemraid module:
-- Open Terminal.
-- $ cd vmemraid
-- $ make
-- If the compile is successful, you will have a file
-named vmemraid.ko. This is the compiled kernel
-module.
-- $ sudo insmod vmemraid.ko
-- This command load the module into the kernel.
-- $ sudo lsmod
-- This command lists all currently loaded modules.
-- Your should see a listing for vmemraid.
-- $ sudo rmmod vmemraid
-- This command unloads the module.
-To partition and format a block device:
-Once your module works to the point that it successfully
-registers a block device with the system, you will see a file
-called /dev/vmemraid. This is the device file that represents
-your “disk”.
-To create a file system on your “disk”, you must first use the
-fdisk utility to partition the disk:
--
--
--
--
--
--
-$ sudo fdisk /dev/vmemraid
-Type n, and press enter (new partition).
-Type p, and press enter (primary partition).
-Type 1, and press enter (partition 1).
-Press enter for all following prompts to select defaults.
-When you come back to the fdisk prompt, type p to display
-the partition table.
-- If you see a single Linux partition, you have correctly
-partitioned your write.
-- Type w, and press enter (write partition table and exit).
-After you partition your disk, you will see an additional device
-file has been created: /dev/vmemraid1
-This new file represents the partition that you have created on
-the disk. You can now create a file system on your new
-partition:
-- $ sudo mkfs.ext3 /dev/vmemraid1
-- This will create a Linux ext3 file system on your
-partition.
-After you have created the file system, you must “mount” it to
-make use of it:
-- $ mkdir /home/vadmin/vmemraid_mnt (this creates an empty
-directory to serve as a “mount point”, only necessary the
-first time).
-- sudo mount /dev/vmemraid1 /home/vadmin/vmemraid_mnt
-You should now have your “disk” mounted at /home/vadmin/
-vmemraid_mnt.
-You may verify that the disk is mounted by typing:
-!
-$ df
-KEEP IN MIND THAT UNLESS YOUR DRIVER IS 100% WORKING, YOU WILL
-BE UNLIKELY TO COMPLETE ALL OF THESE STEPS.
-To drop/add memdisks using the supplied RAID Utility:
-- First, load the vmemraid module as instructed above.
-- $ cd ~/vmemraid
-- $ sudo ./raidutil/raidutil /dev/vmemraid list
-- This will list the currently attached memdisks.
-- $ sudo ./raidutil/raidutil /dev/vmemraid drop n
-- This will drop the disk at location n.
-- $ sudo ./raidutil/raidutil /dev/vmemraid new n
-- This will create a new disk at location n.
+198:416 - Code Assignment 2 - VMEMRAID
+Authors: Elie Rosen
+
+How it works
+------------
+
+The end result of this assignment was to have a working raid 4 disk array established in memory. Raid 4 is the process by which all data on every sector of the disk is XOR'd to the last disk so that parity can be saved (the reverse of this process allows data to be restored). While this causes quite a bit of overhead for every write request, it still has the advantage that if a disk is lost, the data can still be used from the parity information.
+
+There are four basic scenarios for how parity works and how the block driver works.
+1) Data wants to be read and the disk is available so read the data
+2) Data wants to be read and the disk is unavailable so rebuild the data that should have been on that disk from parity. 
+3) Data wants to be written and the disk is available so write the data to the disk, the rebuild parity for that sector on the parity disk 
+	-if the parity disk is gone then just ignore the parity build request, it will be handled later
+4) Data wants to be written and the disk is unavailable so by taking the data that is trying to be written, parity can be created on to the last disk and the data can be recovered when the disk is placed back on
+	-if the parity disk is missing as well then its almost like dividing by zero and the data will become non-functional (worst-case scenario)
+	
+How the parity function works
+-----------------------------
+The parity function is very simple to control, data to be included in parity is stored in the buffer, the buffer can either send data or take in existing data, existing buffer data will only be used in the 4th case mentioned above. in case 3 the buffer is preset to zero's because the data is already stored into the disk. for case 1 and 2 the buffer acts as a method for sending out the correct information. The disk number that the data is going to is very important, because it is used to skip over data that we don't care about since it's being overwritten this way it is certain that only all of the other disks are XOR'd and the result can then be written or assumed to be the correct information. Disk_row is only the current sector being acted on.
+	
+Required Features
+-----------------
+1) The ability to add a disk after it has been dropped and rebuild it from parity
+	-when a new disk is added, every block on every sector is rebuilt from parity and stored onto the newly created disk
+2) The ability to drop a disk
+	-All this does is print a message because no tasks need to be preformed
+3) The ability to safely open the contents
+	-when an open request is sent the spin lock is turned on to block out other process from trying to access or modify data improperly
+	-users are incremented to show the system that someone is using it
+	-when completed the lock is opened
+4) the ability to safety release opened content
+	-same thing as the last process except users is now decremented
+
+Encountered Problems - Block driver and raid0
+---------------------------------------------
+Before I was even able take on the parity abilities I first got working a regular raid0 configurations, this is where data is just stripped across the disks, if any disk is dropped data is pretty much gone because there is no way to recover that data. Some of the problems I encountered when creating this were from within the init function and as the result of missing a few crucial libraries. 
+
+The block driver would compile successfully but would never add the device to /dev. In order to correct this, I carefully went through the general disk functions and realized that not only was I missing the genhd library but also I had a small mistake with the major_num which was I was able to find out once I compiled with the library included and was able to get the proper debug message. 
+
+After this I also found out that I was incorrectly adding a & to get the address of a variable even though the address I really wanted was already stored in that variable, dumb mistake but once correct the block driver was able to compile successfully and be placed into the /dev list.
+
+This allowed for a full working raid0 configuration able to store about 100+MB of data. as well as an ext3 file system. that was able to mount as well.
+
+Encountered Problems - raid4 implementation
+-------------------------------------------
+Due to lack of proper testing procedures I was not fully able to test if the implementation works 100% correctly. I do however have kernel messages that work and show properly which case the block driver is operating in as seen above. 
+
+One of the larger issues that I did encounter was that I was re-xoring the data that was going to be written into the parity disk, I fixed this issue by wiping the data and setting it to 0, and then running the parity function to rebuild parity onto the last disk. 
+
+General Flow of block device
+----------------------------
+1) device is initialized by setting default gen disk values (name, capacity, structure, etc...)
+2) Request function determines if the request deals with memory access and determines if the request is a read or write
+3) Transfer acts as a controller for handling read or write data
+4) if data is a write
+	- do_raid4_write handles writing in the data and rebuilding parity based off of the data to be written
+5) if data is read
+	- do_raid4_read either gives the existing information or uses parity to rebuild missing information
+6) exit destroys all data and cleans up allocated memory, once completed, the block driver can safely be removed
+
+Overall Impressions of Assignment
+--------------------------------
+Although it took a lot of time, effort, and debugging to deliver the final product. I was thoroughly impressed with my newly acquired skills in managing block device and I have already used these skills to finally get my external hard drive working properly on my Linux machine. Who would have thought that this stuff actually has general purpose outside of class, just kidding.
+
+As a whole I really did enjoy working on this, I learned a lot and I'm glad that I can add these new skills to my tool belt.
 

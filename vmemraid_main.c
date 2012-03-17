@@ -59,6 +59,10 @@ int do_raid4_read(unsigned disk_num, unsigned disk_row, char *buffer)
 	else {	
 		/* rebuild the data we want from parity */
 		pr_info("oh no, it appears disk_num %d is missing so the data has to be rebuilt, no worries\n", disk_num);
+		
+		for(i = 0; i < VMEMRAID_HW_SECTOR_SIZE; i++) /* just making sure that data is not pre-written */
+				buffer[i] = 0;
+				
 		build_parity(buffer, disk_num, disk_row);
 		return 0;
 	}
