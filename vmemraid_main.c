@@ -68,12 +68,10 @@ int do_raid4_write(unsigned disk_num, unsigned disk_row, char *buffer)
 	if(memdisk) {
 	/* if the disk is alive write the new data, then rebuild parity onto the last disk */
 		memdisk_write_sector(memdisk, buffer, disk_row);
-		build_parity(buffer, NUM_DISKS, disk_row); /* Create parity data */
+		build_parity(buffer, NUM_DISKS-1, disk_row); /* Create parity data */
 		
-		if(dev->disk_array->disks[NUM_DISKS]) /* Check that last disk exists */
+		if(dev->disk_array->disks[NUM_DISKS-1]) /* Check that last disk exists */
 			memdisk_write_sector(dev->disk_array->disks[NUM_DISKS], buffer, disk_row);
-		else
-			pr_info("Error more than two disks missing!");
 		
 		return 1;
 	}
@@ -81,7 +79,7 @@ int do_raid4_write(unsigned disk_num, unsigned disk_row, char *buffer)
 	/* if the disk you want is gone, recreate parity on the last disk anyways */
 		build_parity(buffer, NUM_DISKS, disk_row); /* Create parity data */
 		
-		if(dev->disk_array->disks[NUM_DISKS]) /* Check that last disk exists */
+		if(dev->disk_array->disks[NUM_DISKS-1]) /* Check that last disk exists */
 			memdisk_write_sector(dev->disk_array->disks[NUM_DISKS], buffer, disk_row);
 		else
 			pr_info("Error more than two disks missing!");
@@ -111,6 +109,8 @@ static void vmemraid_transfer(struct vmemraid_dev *dev, unsigned long sector,
 		buffer_addr = buffer + (i * KERNEL_SECTOR_SIZE);
 		pr_info("disk_num is %d, disk_row is %d\n", disk_num, disk_row);
 
+
+
 		do_raid4_read(disk_num, disk_row, block_buffer);
 		if(write) {
 			memcpy(block_buffer + hw_offset, buffer_addr, KERNEL_SECTOR_SIZE);
@@ -131,7 +131,7 @@ static void vmemraid_request(struct request_queue *q)
 	req = blk_fetch_request(q);
 
 	while (req != NULL) {
-		pr_info("handling reques\n");		
+		pr_info("handling request\n");		
 	
 		if(req->cmd_type != REQ_TYPE_FS) {
 			pr_info("Skip non-cmd request.\n");
@@ -194,13 +194,27 @@ int vmemraid_getgeo(struct block_device *block_device, struct hd_geometry *geo)
 /* NOTE: This will be called with dev->lock HELD */
 void vmemraid_callback_drop_disk(int disk_num)
 { 
-	pr_warn("vmemraid: disk %d was dropped", disk_num);
+	pr_warn("disk %d was dropped", disk_num);
 }
 /* This gets called when a dropped disk is replaced with a new one */
 /* NOTE: This will be called with dev->lock HELD */
 void vmemraid_callback_new_disk(int disk_num)
-{
-	pr_warn("vmemraid: disk %d was added", disk_num);
+{	
+	struct memdisk *memdisk = dev->disk_array->disks[disk_num];
+	static char buffer_block[VMEMRAID_HW_SECTOR_SIZE];
+	int disk_row;
+	
+	pr_warn("attempting to add disk %d", disk_num);
+	pr_info("time to rebuild all the data from parity ughh.....");
+	
+	for(disk_row = 0; disk_row <= KERNEL_SECTOR_SIZE; disk_row++) {
+		build_parity(buffer_block, disk_num, disk_row);
+		memdisk_write_sector(memdisk, buffer_block, disk_row);
+	}
+	
+	pr_warn("disk %d was added successfully", disk_num);
+	
+	
 }
 
 /* This structure must be passed the the block driver API when the */
