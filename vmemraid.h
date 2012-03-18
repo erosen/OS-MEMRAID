@@ -37,8 +37,9 @@ struct vmemraid_dev {
 	int major;
 	unsigned size;
 	struct disk_array *disk_array;
-	short users;
+	short users, lost_disk_count;
 	spinlock_t lock;
+	
 
 	struct request_queue *queue;
 	struct gendisk *gd;
