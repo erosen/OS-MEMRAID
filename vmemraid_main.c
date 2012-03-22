@@ -242,12 +242,8 @@ void vmemraid_callback_new_disk(int disk_num)
 		memdisk_write_sector(memdisk, buffer, disk_row);
 	}
 	
-<<<<<<< HEAD
 	dev->lost_disk_count--;
-=======
-	dev->lost_disk_count++;
->>>>>>> 4b0324dc2b7c748805d68388c9bb4241330ea5b5
-		
+	
 	pr_info("disk %d was added successfully", disk_num);
 	
 	if(dev->lost_disk_count > 1) 	
