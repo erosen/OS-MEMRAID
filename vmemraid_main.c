@@ -35,7 +35,7 @@ void build_parity(char *buffer, unsigned disk_num, unsigned disk_row)
 	static char buffer_block[VMEMRAID_HW_SECTOR_SIZE];
 	
 	for(i = 0; i < NUM_DISKS; i++) {
-		if(i != disk_num) {
+		if(!disk_num) {
 			memdisk_read_sector(dev->disk_array->disks[i], buffer_block, disk_row);
 		
 			for(j = 0; j < VMEMRAID_HW_SECTOR_SIZE; j++) {
@@ -61,8 +61,9 @@ int do_raid4_read(unsigned disk_num, unsigned disk_row, char *buffer)
 	else {	
 		/* rebuild the data we want from parity */
 		pr_info("oh no, it appears disk_num %d is missing so the data has to be rebuilt, no worries\n", disk_num);
-		for(i = 0; i < VMEMRAID_HW_SECTOR_SIZE; i++) /* just making sure that the buffer is clean*/
-			buffer[i] = 0;
+		
+		for(i = 0; i < VMEMRAID_HW_SECTOR_SIZE; i++) /* just making sure that data is not pre-written */
+				buffer[i] = 0;
 				
 		build_parity(buffer, disk_num, disk_row);
 		return 0;
@@ -130,16 +131,14 @@ static void vmemraid_transfer(struct vmemraid_dev *dev, unsigned long sector,
 		pr_info("disk_num is %d, disk_row is %d\n", disk_num, disk_row);
 
 
-		if(dev->lost_disk_count > 1)
-			pr_info("Not going to attempt to get data since all is already lost. Too many disks are gone");
+
+		do_raid4_read(disk_num, disk_row, block_buffer); /* get the data on the disk in the sector and put it in the buffer */
+		if(write) {
+			memcpy(block_buffer + hw_offset, buffer_addr, KERNEL_SECTOR_SIZE); /* copy the data into memory */
+			do_raid4_write(disk_num, disk_row, block_buffer); /* write the data to the disk to the sector from the buffer */
+		}
 		else {
-			do_raid4_read(disk_num, disk_row, block_buffer); /* get the data on the disk in the sector and put it in the buffer */
-			if(write) {
-				memcpy(block_buffer + hw_offset, buffer_addr, KERNEL_SECTOR_SIZE); /* copy the data into memory */
-				do_raid4_write(disk_num, disk_row, block_buffer); /* write the data to the disk to the sector from the buffer */
-			}
-			else 
-				memcpy(buffer_addr, block_buffer + hw_offset, KERNEL_SECTOR_SIZE); /* copy the read data into memory to send 												   back with the request */
+			memcpy(buffer_addr, block_buffer + hw_offset, KERNEL_SECTOR_SIZE); /* copy the read data into memory to send 												   back with the request */
 		}
 	}
 }
@@ -216,13 +215,7 @@ int vmemraid_getgeo(struct block_device *block_device, struct hd_geometry *geo)
 /* NOTE: This will be called with dev->lock HELD */
 void vmemraid_callback_drop_disk(int disk_num)
 { 
-	dev->lost_disk_count++;
 	pr_warn("disk %d was dropped", disk_num);
-	
-	if(dev->lost_disk_count > 1)
-		pr_warn("too many disks have been dropped all data is lost");
-	
-	
 }
 /* This gets called when a dropped disk is replaced with a new one */
 /* NOTE: This will be called with dev->lock HELD */
@@ -242,12 +235,11 @@ void vmemraid_callback_new_disk(int disk_num)
 		memdisk_write_sector(memdisk, buffer, disk_row);
 	}
 	
+
 	dev->lost_disk_count--;
-	
+
 	pr_info("disk %d was added successfully", disk_num);
 	
-	if(dev->lost_disk_count > 1) 	
-		pr_warn("even though a disk was added, data can't be correct until only 1 disk is missing");
 	
 }
 
@@ -274,7 +266,7 @@ static int __init vmemraid_init(void)
 		pr_warn("Unable to get major number. Driver will not function.\n");
 		return -EBUSY;
 	}
-	dev->lost_disk_count = 0;
+	
 	dev = kmalloc(sizeof(struct vmemraid_dev), GFP_KERNEL);
 	memset(dev, 0, sizeof(struct vmemraid_dev));
 	dev->major = major;

@@ -43,11 +43,9 @@ This allowed for a full working raid0 configuration able to store about 100+MB o
 
 Encountered Problems - raid4 implementation
 -------------------------------------------
+Due to lack of proper testing procedures I was not fully able to test if the implementation works 100% correctly. I do however have kernel messages that work and show properly which case the block driver is operating in as seen above. 
+
 One of the larger issues that I did encounter was that I was re-xoring the data that was going to be written into the parity disk, I fixed this issue by wiping the data and setting it to 0, and then running the parity function to rebuild parity onto the last disk. 
-
-I'm an idiot and I forgot to add an i to line 38 which was causing the driver to not calculate parity correctly. 
-
-Program should work 100% now.
 
 General Flow of block device
 ----------------------------
